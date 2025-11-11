@@ -101,12 +101,35 @@ class SortMergeJoin:
                 rp += 1
                 if rp >= len(rdf): refill_right()
             else:
-                lstart = lp
-                while lp < len(ldf) and ldf.iloc[lp][left_key] == lv: lp += 1
-                rstart = rp
-                while rp < len(rdf) and rdf.iloc[rp][right_key] == rv: rp += 1
-                Lgrp = ldf.iloc[lstart:lp]
-                Rgrp = rdf.iloc[rstart:rp]
+                # Collect full equal-key groups across batch boundaries on both sides
+                match_key = lv
+                # Left group
+                l_parts = []
+                while True:
+                    lstart = lp
+                    while lp < len(ldf) and ldf.iloc[lp][left_key] == match_key: lp += 1
+                    l_parts.append(ldf.iloc[lstart:lp])
+                    if lp < len(ldf):  # next left value differs
+                        break
+                    # need to refill and check if next batch continues same key
+                    prev_ldf = ldf
+                    refill_left()
+                    if ldf is None or len(ldf) == 0 or ldf.iloc[lp if lp < len(ldf) else 0][left_key] != match_key:
+                        break
+                Lgrp = pd.concat(l_parts, ignore_index=True) if len(l_parts) > 1 else l_parts[0]
+                # Right group
+                r_parts = []
+                while True:
+                    rstart = rp
+                    while rp < len(rdf) and rdf.iloc[rp][right_key] == match_key: rp += 1
+                    r_parts.append(rdf.iloc[rstart:rp])
+                    if rp < len(rdf):
+                        break
+                    prev_rdf = rdf
+                    refill_right()
+                    if rdf is None or len(rdf) == 0 or rdf.iloc[rp if rp < len(rdf) else 0][right_key] != match_key:
+                        break
+                Rgrp = pd.concat(r_parts, ignore_index=True) if len(r_parts) > 1 else r_parts[0]
                 out_buf.append(Lgrp.merge(Rgrp, left_on=left_key, right_on=right_key, how="inner"))
                 if len(out_buf) >= 16:
                     chunk = pd.concat(out_buf, ignore_index=True)
@@ -114,8 +137,8 @@ class SortMergeJoin:
                     if writer is None:
                         writer = pq.ParquetWriter(out.path, tbl.schema, compression="snappy")
                     writer.write_table(tbl); out_buf.clear()
-                if lp >= len(ldf): refill_left()
-                if rp >= len(rdf): refill_right()
+                if ldf is not None and lp >= len(ldf): refill_left()
+                if rdf is not None and rp >= len(rdf): refill_right()
 
         if out_buf:
             chunk = pd.concat(out_buf, ignore_index=True)

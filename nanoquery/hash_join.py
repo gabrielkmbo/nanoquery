@@ -85,4 +85,16 @@ class HashPartitionJoin:
                     writer.write_table(tbl)
 
         if writer: writer.close()
+        # Ensure output file exists even if there were no matches
+        if not os.path.exists(out.path):
+            # Derive output columns similar to a merge result
+            l_cols = cols_left if cols_left is not None else pq.ParquetFile(left.path).schema.names
+            r_cols = cols_right if cols_right is not None else pq.ParquetFile(right.path).schema.names
+            # Drop duplicate right key if names are equal to emulate merge(on=key)
+            if left_key == right_key and right_key in r_cols:
+                r_cols = [c for c in r_cols if c != right_key]
+            cols = list(l_cols) + list(r_cols)
+            empty = pd.DataFrame({c: pd.Series(dtype="float64") for c in cols})
+            tbl = pa.Table.from_pandas(empty, preserve_index=False)
+            pq.write_table(tbl, out.path, compression="snappy")
         return out
